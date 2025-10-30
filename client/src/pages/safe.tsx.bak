@@ -1,0 +1,339 @@
+import { useState } from "react";
+import { useToast } from "@/hooks/use-toast";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Shield, Copy, ExternalLink, CheckCircle2, Clock, AlertCircle, Send } from "lucide-react";
+import type { SafeTransaction } from "@shared/schema";
+
+interface SafeInfo {
+  address: string;
+  owners: string[];
+  threshold: number;
+  nonce: number;
+}
+
+export default function Safe() {
+  const { toast } = useToast();
+  const [proposalForm, setProposalForm] = useState({
+    to: "",
+    value: "0",
+    data: "0x",
+  });
+
+  const { data: transactions, isLoading } = useQuery<SafeTransaction[]>({
+    queryKey: ["/api/safe/transactions"],
+    refetchInterval: 30000,
+  });
+
+  const { data: pendingTransactions } = useQuery<any[]>({
+    queryKey: ["/api/safe/pending"],
+    refetchInterval: 30000,
+  });
+
+  const { data: safeInfo } = useQuery<SafeInfo>({
+    queryKey: ["/api/safe/info"],
+  });
+
+  const proposeMutation = useMutation({
+    mutationFn: async (data: typeof proposalForm) => {
+      return apiRequest("/api/safe/propose", {
+        method: "POST",
+        body: JSON.stringify(data),
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/safe/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/safe/pending"] });
+      toast({
+        title: "✅ Транзакция предложена",
+        description: "Транзакция успешно создана и ожидает подписей",
+      });
+      setProposalForm({ to: "", value: "0", data: "0x" });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "❌ Ошибка",
+        description: error.message || "Не удалось создать транзакцию",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const confirmMutation = useMutation({
+    mutationFn: async (safeTxHash: string) => {
+      return apiRequest(`/api/safe/confirm/${safeTxHash}`, {
+        method: "POST",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/safe/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/safe/pending"] });
+      toast({
+        title: "✅ Подпись добавлена",
+        description: "Транзакция подписана",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "❌ Ошибка подписания",
+        description: error.message || "Не удалось подписать транзакцию",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const executeMutation = useMutation({
+    mutationFn: async (safeTxHash: string) => {
+      return apiRequest(`/api/safe/execute/${safeTxHash}`, {
+        method: "POST",
+      });
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/safe/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/safe/pending"] });
+      toast({
+        title: "✅ Транзакция исполнена",
+        description: `TX: ${data.txHash?.substring(0, 10)}...`,
+      });
+    },
+    onError: (error: any) {
+      toast({
+        title: "❌ Ошибка исполнения",
+        description: error.message || "Не удалось исполнить транзакцию",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast({
+      title: "Скопировано",
+      description: "Адрес скопирован в буфер обмена",
+    });
+  };
+
+  const handlePropose = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await proposeMutation.mutateAsync(proposalForm);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="container mx-auto p-6 max-w-6xl space-y-6">
+        <Skeleton className="h-12 w-64" />
+        <Skeleton className="h-64" />
+      </div>
+    );
+  }
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case "PENDING":
+        return <Badge variant="secondary"><Clock className="h-3 w-3 mr-1" />Ожидает</Badge>;
+      case "READY":
+        return <Badge variant="default"><CheckCircle2 className="h-3 w-3 mr-1" />Готово</Badge>;
+      case "EXECUTED":
+        return <Badge><CheckCircle2 className="h-3 w-3 mr-1" />Исполнено</Badge>;
+      case "FAILED":
+        return <Badge variant="destructive"><AlertCircle className="h-3 w-3 mr-1" />Ошибка</Badge>;
+      default:
+        return <Badge variant="outline">{status}</Badge>;
+    }
+  };
+
+  return (
+    <div className="container mx-auto p-6 max-w-6xl space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+          <Shield className="h-8 w-8 text-primary" />
+          Gnosis Safe Multisig
+        </h1>
+        <p className="text-muted-foreground">Управление мультиподписными транзакциями</p>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Информация о Safe</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <p className="text-sm text-muted-foreground mb-1">Адрес Safe</p>
+              <div className="flex items-center gap-2">
+                <code className="text-sm font-mono bg-muted px-2 py-1 rounded flex-1 truncate" data-testid="text-safe-address">
+                  {safeInfo?.address || "0x...настройте в Settings"}
+                </code>
+                <button
+                  onClick={() => copyToClipboard(safeInfo?.address || "")}
+                  className="p-1 hover:bg-muted rounded"
+                  data-testid="button-copy-safe-address"
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground mb-1">Владельцы</p>
+              <p className="text-lg font-medium" data-testid="text-safe-owners">
+                {safeInfo?.owners.length || 2}
+              </p>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground mb-1">Порог Подписей</p>
+              <p className="text-lg font-medium" data-testid="text-safe-threshold">
+                {safeInfo?.threshold || 2} из {safeInfo?.owners.length || 2}
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Создать Транзакцию</CardTitle>
+          <CardDescription>Предложить новую мультиподписную транзакцию</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handlePropose} className="space-y-4">
+            <div>
+              <Label htmlFor="to">Получатель (To)</Label>
+              <Input
+                id="to"
+                value={proposalForm.to}
+                onChange={(e) => setProposalForm({ ...proposalForm, to: e.target.value })}
+                placeholder="0x..."
+                data-testid="input-tx-to"
+              />
+            </div>
+            <div>
+              <Label htmlFor="value">Сумма (Wei)</Label>
+              <Input
+                id="value"
+                value={proposalForm.value}
+                onChange={(e) => setProposalForm({ ...proposalForm, value: e.target.value })}
+                placeholder="0"
+                data-testid="input-tx-value"
+              />
+            </div>
+            <div>
+              <Label htmlFor="data">Data (Hex)</Label>
+              <Input
+                id="data"
+                value={proposalForm.data}
+                onChange={(e) => setProposalForm({ ...proposalForm, data: e.target.value })}
+                placeholder="0x"
+                data-testid="input-tx-data"
+              />
+            </div>
+            <Button
+              type="submit"
+              disabled={proposeMutation.isPending || !proposalForm.to}
+              data-testid="button-propose-tx"
+            >
+              <Send className="mr-2 h-4 w-4" />
+              {proposeMutation.isPending ? "Создание..." : "Предложить Транзакцию"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Ожидающие Транзакции</CardTitle>
+          <CardDescription>Транзакции, требующие дополнительных подписей</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {transactions && transactions.length > 0 ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Hash</TableHead>
+                  <TableHead>Получатель</TableHead>
+                  <TableHead>Статус</TableHead>
+                  <TableHead>Подписи</TableHead>
+                  <TableHead>Дата</TableHead>
+                  <TableHead>Действия</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {transactions.map((tx) => (
+                  <TableRow key={tx.id}>
+                    <TableCell className="font-mono text-sm" data-testid={`text-tx-hash-${tx.id}`}>
+                      {tx.safeTxHash.substring(0, 12)}...
+                    </TableCell>
+                    <TableCell className="font-mono text-sm">
+                      {tx.to.substring(0, 10)}...
+                    </TableCell>
+                    <TableCell>
+                      {getStatusBadge(tx.status)}
+                    </TableCell>
+                    <TableCell data-testid={`text-tx-confirmations-${tx.id}`}>
+                      {tx.confirmations}/{tx.requiredConfirmations}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {new Date(tx.createdAt).toLocaleDateString('ru-RU')}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-1">
+                        {tx.status === "PENDING" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => confirmMutation.mutate(tx.safeTxHash)}
+                            disabled={confirmMutation.isPending}
+                            data-testid={`button-confirm-${tx.id}`}
+                          >
+                            Подписать
+                          </Button>
+                        )}
+                        {tx.status === "READY" && (
+                          <Button
+                            size="sm"
+                            onClick={() => executeMutation.mutate(tx.safeTxHash)}
+                            disabled={executeMutation.isPending}
+                            data-testid={`button-execute-${tx.id}`}
+                          >
+                            Исполнить
+                          </Button>
+                        )}
+                        <button className="p-1 hover:bg-muted rounded">
+                          <ExternalLink className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <div className="text-center py-8 text-muted-foreground">
+              Нет ожидающих транзакций
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-primary/20 bg-primary/5">
+        <CardHeader>
+          <CardTitle className="text-base">💡 Gnosis Safe SDK</CardTitle>
+        </CardHeader>
+        <CardContent className="text-sm space-y-2">
+          <p>• Полная интеграция с Gnosis Safe Protocol Kit и API Kit</p>
+          <p>• Создание, подписание и исполнение мультисиг транзакций</p>
+          <p>• Автоматическая синхронизация с Safe Transaction Service</p>
+          <p>• Поддержка Ledger для второй подписи</p>
+          <p>• Real-time обновления статуса транзакций через WebSocket</p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
